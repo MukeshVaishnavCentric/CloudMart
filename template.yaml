@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudMart lambda 
+
+Globals:
+  Function:
+    Runtime: dotnet8
+    MemorySize: 512
+    Timeout: 30
+    Tracing: Active
+    Tags:
+      Project: CloudMart
+      Environment: Dev
+
+Resources:
+
+  CloudMartApi: #api gateway resource
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: CloudMartApi
+      StageName: prod
+      EndpointConfiguration:
+        Type: REGIONAL   
+      Auth:
+        DefaultAuthorizer: MyCognitoAuth
+        Authorizers:          
+          MyCognitoAuth:
+            UserPoolArn: 
+              Fn::GetAtt:
+                - CloudMartUserPool
+                - Arn
+
+  CloudMartLambda: #lambda function 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CloudMart
+      CodeUri:
+        Bucket: cloudmart-deploy-artifacts
+        Key: Amazon.Lambda.APIGatewayEvents.zip
+      Handler: CloudMart::CloudMart.Function::FunctionHandler
+      Events:
+        Products:
+          Type: Api
+          Properties:
+            RestApiId: 
+              Ref: CloudMartApi
+            Path: /products
+            Method: ANY
+            Auth:
+              Authorizer: MyCognitoAuth
+        ProductById:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: CloudMartApi
+            Path: /products/{id}
+            Method: ANY
+            Auth:
+              Authorizer: MyCognitoAuth
+        ProxyApi:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: CloudMartApi
+            Path: /{proxy+}
+            Method: ANY
+      Policies:
+        DynamoDBCrudPolicy:
+          TableName: 
+            Ref: CloudMartTable
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: CloudMartTable
+          ORDER_QUEUE_URL:
+            Ref: OrderQueue
+
+  PaymentLambda: #lambda function 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CloudMart-Payment
+      Handler: CloudMart::CloudMart.PaymentHandler::HandleRequest
+      CodeUri: 
+        Bucket: cloudmart-deploy-artifacts
+        Key: Amazon.Lambda.APIGatewayEvents.zip
+
+  FraudLambda: #lambda function 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CloudMart-Fraud
+      Handler: CloudMart::CloudMart.FraudHandler::HandleRequest
+      CodeUri: 
+        Bucket: cloudmart-deploy-artifacts
+        Key: Amazon.Lambda.APIGatewayEvents.zip
+
+  CloudMartTable: #dynamodb table 
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CloudMartTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: EntityType 
+          AttributeType: S
+        - AttributeName: EntityName
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: CMIndexV2
+          KeySchema:
+            - AttributeName: EntityType
+              KeyType: HASH
+            - AttributeName: EntityName
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+
+  OrderQueue: # sqs queue 
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: CloudMartOrderQueue
+
+  OrderStateMachineRole: # step functions role
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: states.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: ExecuteLambdas
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: lambda:InvokeFunction
+                  Resource:
+                    - Fn::GetAtt: [PaymentLambda, Arn]
+                    - Fn::GetAtt: [FraudLambda, Arn]
+
+  OrderStateMachine: # step functions state machine
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Role: 
+        Fn::GetAtt: [OrderStateMachineRole, Arn]
+      Definition:
+        StartAt: ParallelProcessing
+        States:
+          ParallelProcessing:
+            Type: Parallel
+            Branches:
+              - StartAt: Payment
+                States:
+                  Payment:
+                    Type: Task
+                    Resource: 
+                      Fn::GetAtt: [PaymentLambda, Arn]
+                    End: true
+              - StartAt: Fraud
+                States:
+                  Fraud:
+                    Type: Task
+                    Resource:
+                      Fn::GetAtt: [FraudLambda, Arn]
+                    End: true
+            Next: Inventory
+
+          Inventory:
+            Type: Choice
+            Choices:
+              # Check Index 0 (Payment) and Index 1 (Fraud)
+              - And:
+                  - Variable: "$[0].status"
+                    StringEquals: "SUCCESS"
+                  - Variable: "$[1].isFraud"
+                    BooleanEquals: false
+                Next: Shipping
+            Default: FailOrder
+
+          Shipping:
+            Type: Succeed
+          FailOrder:
+            Type: Fail
+            Error: "OrderRejected"
+            Cause: "Payment failed or Fraud detected"
+
+  CloudMartUserPool: # cognito user pool
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: CloudMartUsers
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: "OFF"      
+
+  CloudMartWAF: # waf web acl
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: CloudMartWebACL
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: CloudMartWAF
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: RateLimit
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: 1000
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimit
+            SampledRequestsEnabled: true
+
+
