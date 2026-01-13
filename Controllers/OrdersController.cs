@@ -26,20 +26,38 @@ namespace CloudMart.Controllers
 
         private async Task<APIGatewayProxyResponse> CreateOrderAsync(APIGatewayProxyRequest req)
         {
-            try
-            {
-                var order = JsonSerializer.Deserialize<Order>(req.Body!);
-                await _orderRepository.AddOrderAsync(order!);
+            var order = JsonSerializer.Deserialize<Order>(req.Body!);
 
-                await _orderSeravice.SendSqsMessageForOrderAsync(order, Environment.GetEnvironmentVariable("OrderQueueSqsUrl")!); // todo: set env variable in sam template file
-                
-                return Response.Created(order!);
-            }
-            catch(Exception ex)
+            await _orderRepository.AddOrderAsync(order!);
+
+            var payload = new
             {
-                return Response.InternalServerError(ex.Message);
-            }
+                orderId = Guid.NewGuid().ToString(),
+                orderAmount = order!.Amount,
+                inventoryAvailable = true
+            };
+
+            await _orderSeravice.StateMachineStartAsync(Environment.GetEnvironmentVariable("ORDER_STATE_MACHINE_ARN")!, payload);
+
+            return Response.Ok("Order processing started");
         }
+
+        //private async Task<APIGatewayProxyResponse> CreateOrderAsync(APIGatewayProxyRequest req)
+        //{
+        //    try
+        //    {
+        //        var order = JsonSerializer.Deserialize<Order>(req.Body!);
+        //        await _orderRepository.AddOrderAsync(order!);
+
+        //        await _orderSeravice.SendSqsMessageForOrderAsync(order, Environment.GetEnvironmentVariable("OrderQueueSqsUrl")!); // todo: set env variable in sam template file
+
+        //        return Response.Created(order!);
+        //    }
+        //    catch(Exception ex)
+        //    {
+        //        return Response.InternalServerError(ex.Message);
+        //    }
+        //}
 
         private async Task<APIGatewayProxyResponse> GetByUserAsync(string userId)
         {

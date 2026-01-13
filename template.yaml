@@ -74,6 +74,8 @@ Resources:
             Ref: CloudMartTable
           ORDER_QUEUE_URL:
             Ref: OrderQueue
+          ORDER_STATE_MACHINE_ARN:
+            Ref: OrderStateMachine
 
   PaymentLambda: #lambda function 
     Type: AWS::Serverless::Function
@@ -90,6 +92,15 @@ Resources:
       FunctionName: CloudMart-Fraud
       Handler: CloudMart::CloudMart.FraudHandler::HandleRequest
       CodeUri: 
+        Bucket: cloudmart-deploy-artifacts
+        Key: Amazon.Lambda.APIGatewayEvents.zip
+
+  ApprovalLambda: #lambda function 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CloudMart-Approval
+      Handler: CloudMart::CloudMart.ApprovalHandler::HandleRequest
+      CodeUri:
         Bucket: cloudmart-deploy-artifacts
         Key: Amazon.Lambda.APIGatewayEvents.zip
 
@@ -149,6 +160,12 @@ Resources:
                   Resource:
                     - Fn::GetAtt: [PaymentLambda, Arn]
                     - Fn::GetAtt: [FraudLambda, Arn]
+                    - Fn::GetAtt: [ApprovalLambda, Arn]
+                - Effect: Allow
+                  Action:
+                    - states:SendTaskSuccess
+                    - states:SendTaskFailure
+                  Resource: "*"
 
   OrderStateMachine: # step functions state machine
     Type: AWS::Serverless::StateMachine
@@ -167,34 +184,96 @@ Resources:
                     Type: Task
                     Resource: 
                       Fn::GetAtt: [PaymentLambda, Arn]
+                    Retry:
+                      - ErrorEquals: ["States.ALL"]
+                        IntervalSeconds: 2
+                        MaxAttempts: 3
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        Next: PaymentFailed
                     End: true
+                  PaymentFailed:
+                    Type: Fail  
               - StartAt: Fraud
                 States:
                   Fraud:
                     Type: Task
                     Resource:
                       Fn::GetAtt: [FraudLambda, Arn]
+                    Retry:
+                      - ErrorEquals: ["States.ALL"]
+                        IntervalSeconds: 2
+                        MaxAttempts: 2
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        Next: FraudDetected
                     End: true
-            Next: Inventory
+                  FraudDetected:
+                    Type: Fail  
+            Next: InventoryCheck
 
-          Inventory:
+          InventoryCheck:
             Type: Choice
             Choices:
-              # Check Index 0 (Payment) and Index 1 (Fraud)
-              - And:
-                  - Variable: "$[0].status"
-                    StringEquals: "SUCCESS"
-                  - Variable: "$[1].isFraud"
-                    BooleanEquals: false
-                Next: Shipping
-            Default: FailOrder
+              - Variable: "$.inventoryAvailable"
+                BooleanEquals: true
+                Next: PaymentWait
+            Default: OutOfStock
 
-          Shipping:
-            Type: Succeed
-          FailOrder:
+          PaymentWait:
+            Type: Wait
+            Seconds: 10
+            Next: HighValueCheck
+
+          HighValueCheck:
+            Type: Choice
+            Choices:
+              - Variable: "$.orderAmount"
+                NumericGreaterThanEquals: 5000
+                Next: HumanApproval
+            Default: ShipOrder
+
+          HumanApproval:
+            Type: Task
+            Resource: "arn:aws:states:::lambda:invoke.waitForTaskToken"
+            Parameters:
+              FunctionName:
+                Fn::GetAtt: [ApprovalLambda, Arn]
+              Payload:
+                TaskToken.$: "$$.Task.Token"
+                OrderId.$: "$.orderId"
+                OrderAmount.$: "$.orderAmount"
+            TimeoutSeconds: 3600
+            Catch:
+              - ErrorEquals: ["States.Timeout"]
+                Next: ApprovalTimeout
+            Next: ShipOrder
+
+          ShipOrder:
+            Type: Succeed                  
+          OutOfStock:
             Type: Fail
-            Error: "OrderRejected"
-            Cause: "Payment failed or Fraud detected"
+          ApprovalTimeout:
+            Type: Fail
+
+          # Inventory:
+          #   Type: Choice
+          #   Choices:
+          #     # Check Index 0 (Payment) and Index 1 (Fraud)
+          #     - And:
+          #         - Variable: "$[0].status"
+          #           StringEquals: "SUCCESS"
+          #         - Variable: "$[1].isFraud"
+          #           BooleanEquals: false
+          #       Next: Shipping
+          #   Default: FailOrder
+
+          # Shipping:
+          #   Type: Succeed
+          # FailOrder:
+          #   Type: Fail
+          #   Error: "OrderRejected"
+          #   Cause: "Payment failed or Fraud detected"
 
   CloudMartUserPool: # cognito user pool
     Type: AWS::Cognito::UserPool

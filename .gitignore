@@ -1,0 +1,75 @@
+# Visual Studio / .NET
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+[Bb]in/
+[Oo]bj/
+**/bin/
+**/obj/
+*.dll
+*.exe
+*.pdb
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+*.nupkg
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# NuGet
+.nuget/
+packages/
+project.lock.json
+*.nupkg
+
+# ASP.NET / Node
+wwwroot/node_modules/
+npm-debug.log
+yarn-error.log
+client-app/build/
+
+# User secrets and local settings
+secrets.json
+secrets.*.json
+.local.settings.json
+.env
+.env.*
+
+# AWS SAM / Lambda
+.aws-sam/
+.aws-sam/*
+.aws-lambda-tools-defaults.json
+
+# Publish
+publish/
+
+# Logs, databases, caches
+*.log
+logs/
+*.sqlite
+*.db
+*.cache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Other
+.vscode/
+.idea/
+
+# Ignore Rider caches
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/dictionaries
+.idea/**/shelf

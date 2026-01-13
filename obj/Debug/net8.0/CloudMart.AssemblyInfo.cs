@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CloudMart")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+37eae02554735293049fc182c97027b1c0597bf2")]
 [assembly: System.Reflection.AssemblyProductAttribute("CloudMart")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CloudMart")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
